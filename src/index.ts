@@ -339,7 +339,9 @@ async function runServer() {
   if (transport === 'streamable-http') {
     // Streamable HTTP mode - run as HTTP server
     const port = parseInt(process.env.PORT || '3000', 10);
-    const host = process.env.HOST || '127.0.0.1';
+    // Heroku and other cloud platforms require binding to 0.0.0.0
+    // Always use 0.0.0.0 for streamable-http unless HOST is explicitly set
+    const host = process.env.HOST || '0.0.0.0';
     
     // Create streamable HTTP transport (stateful mode with session management)
     const httpTransport = new StreamableHTTPServerTransport({

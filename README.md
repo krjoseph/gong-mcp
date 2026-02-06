@@ -25,7 +25,7 @@ A Model Context Protocol (MCP) server that provides access to Gong's API for ret
 | `GONG_API_URL` | No | `https://api.gong.io/v2` | Gong API base URL |
 | `MCP_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `streamable-http` |
 | `PORT` | No | `3000` | HTTP server port (only for `streamable-http` mode) |
-| `HOST` | No | `127.0.0.1` | HTTP server host (only for `streamable-http` mode) |
+| `HOST` | No | `0.0.0.0` | HTTP server host (only for `streamable-http` mode) |
 
 \* **Required for stdio transport**. Optional for streamable-http transport when using bring-your-own-token (see below).
 
@@ -294,14 +294,18 @@ docker run -p 3000:3000 \
 
 The HTTP transport mode makes it easy to deploy to cloud platforms:
 
-**Heroku:**
+**Heroku (Recommended):**
 ```bash
-heroku create your-gong-mcp
+# Quick deploy with automated script
+./deploy-heroku.sh main
+
+# Or manually
+heroku create gong-mcp
 heroku config:set MCP_TRANSPORT=streamable-http
-heroku config:set GONG_ACCESS_KEY=your_key
-heroku config:set GONG_ACCESS_SECRET=your_secret
 git push heroku main
 ```
+
+📘 **See [HEROKU-DEPLOYMENT.md](./HEROKU-DEPLOYMENT.md) for complete Heroku deployment guide.**
 
 **AWS ECS/Fargate, Google Cloud Run, Azure Container Instances:**
 - Use the Docker image with HTTP transport
