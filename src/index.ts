@@ -60,12 +60,17 @@ interface GongTranscript {
   }>;
 }
 
+interface GongCallTranscript {
+  callId: string;
+  transcript: GongTranscript[];
+}
+
 interface GongListCallsResponse {
   calls: GongCall[];
 }
 
 interface GongRetrieveTranscriptsResponse {
-  transcripts: GongTranscript[];
+  callTranscripts: GongCallTranscript[];
 }
 
 interface GongListCallsArgs {
@@ -189,35 +194,41 @@ class GongClient {
     const searchLower = searchText.toLowerCase();
     const matches: any[] = [];
 
-    for (const transcript of transcriptsResponse.transcripts || []) {
-      const matchingSentences = transcript.sentences.filter(sentence => 
-        sentence.text.toLowerCase().includes(searchLower)
-      );
-
-      if (matchingSentences.length > 0) {
-        // Find the corresponding call
-        const call = callsResponse.calls.find(c => 
-          transcriptsResponse.transcripts.some(t => t.speakerId && c.id)
+    for (const callTranscript of transcriptsResponse.callTranscripts || []) {
+      // Find the corresponding call info
+      const call = callsResponse.calls.find(c => c.id === callTranscript.callId);
+      
+      // Search through all transcripts for this call
+      for (const transcript of callTranscript.transcript) {
+        const matchingSentences = transcript.sentences.filter(sentence => 
+          sentence.text.toLowerCase().includes(searchLower)
         );
 
-        matches.push({
-          callId: call?.id,
-          callTitle: call?.title,
-          callDate: call?.started,
-          speakerId: transcript.speakerId,
-          topic: transcript.topic,
-          matchCount: matchingSentences.length,
-          matches: matchingSentences.map(s => ({
-            text: s.text,
-            startTime: s.start,
-            // Include context (surrounding text)
-            context: this.getContext(transcript.sentences, s.start, 50)
-          }))
-        });
+        if (matchingSentences.length > 0) {
+          matches.push({
+            callId: callTranscript.callId,
+            callTitle: call?.title,
+            callDate: call?.started,
+            callUrl: call?.url,
+            speakerId: transcript.speakerId,
+            topic: transcript.topic,
+            matchCount: matchingSentences.length,
+            matches: matchingSentences.map(s => ({
+              text: s.text,
+              startTime: s.start,
+              // Include context (surrounding text)
+              context: this.getContext(transcript.sentences, s.start, 50)
+            }))
+          });
 
-        if (matches.length >= maxResults) {
-          break;
+          if (matches.length >= maxResults) {
+            break;
+          }
         }
+      }
+      
+      if (matches.length >= maxResults) {
+        break;
       }
     }
 
