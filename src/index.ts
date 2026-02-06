@@ -343,13 +343,6 @@ async function runServer() {
     // Always use 0.0.0.0 for streamable-http unless HOST is explicitly set
     const host = process.env.HOST || '0.0.0.0';
     
-    // Create streamable HTTP transport (stateful mode with session management)
-    const httpTransport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-    
-    await server.connect(httpTransport);
-    
     // Create Express app
     const app = express();
     app.use(express.json());
@@ -359,9 +352,44 @@ async function runServer() {
       res.json({ status: 'healthy', transport: 'streamable-http' });
     });
     
-    // MCP endpoint - handles both POST (JSON-RPC requests) and GET (SSE streaming)
+    // MCP endpoint - creates new transport for each request
+    // This avoids session conflicts and handles timeouts better
     app.all('/mcp', async (req, res) => {
-      await httpTransport.handleRequest(req, res, req.body);
+      try {
+        // Create a new transport for this request (stateless mode)
+        const httpTransport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined, // Stateless mode
+          enableJsonResponse: true // Enable JSON-only responses (no SSE)
+        });
+        
+        // Create a new server instance for this request
+        const requestServer = new Server(
+          { name: "example-servers/gong", version: "0.1.0" },
+          { capabilities: { tools: {} } }
+        );
+        
+        // Copy request handlers from main server to request server
+        const mainServer = server as any;
+        if (mainServer._requestHandlers) {
+          (requestServer as any)._requestHandlers = new Map(mainServer._requestHandlers);
+        }
+        
+        // Connect and handle request
+        await requestServer.connect(httpTransport);
+        await httpTransport.handleRequest(req, res, req.body);
+      } catch (error) {
+        console.error('Error handling MCP request:', error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error',
+            },
+            id: null
+          });
+        }
+      }
     });
     
     app.listen(port, host, () => {
