@@ -6,14 +6,20 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "start:http": "MCP_TRANSPORT=streamable-http node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "dev:http": "tsc && MCP_TRANSPORT=streamable-http node dist/index.js",
+    "heroku-postbuild": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.8.0",
     "axios": "^1.6.7",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^20.17.30",
     "typescript": "^5.8.2"
   }
