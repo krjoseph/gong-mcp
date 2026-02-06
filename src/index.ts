@@ -78,6 +78,13 @@ interface GongRetrieveTranscriptsArgs {
   callIds: string[];
 }
 
+interface GongSearchTranscriptsArgs {
+  searchText: string;
+  fromDateTime?: string;
+  toDateTime?: string;
+  maxResults?: number;
+}
+
 // Gong API Client
 class GongClient {
   private accessKey?: string;
@@ -165,6 +172,91 @@ class GongClient {
       }
     });
   }
+
+  async searchTranscripts(searchText: string, fromDateTime?: string, toDateTime?: string, maxResults: number = 50): Promise<any> {
+    // Step 1: Get calls within date range
+    const callsResponse = await this.listCalls(fromDateTime, toDateTime);
+    
+    if (!callsResponse.calls || callsResponse.calls.length === 0) {
+      return { matches: [], totalCalls: 0, searchedCalls: 0 };
+    }
+
+    // Step 2: Get transcripts for these calls (in batches to avoid overwhelming the API)
+    const callIds = callsResponse.calls.slice(0, Math.min(100, maxResults * 2)).map(call => call.id);
+    const transcriptsResponse = await this.retrieveTranscripts(callIds);
+
+    // Step 3: Search through transcripts
+    const searchLower = searchText.toLowerCase();
+    const matches: any[] = [];
+
+    for (const transcript of transcriptsResponse.transcripts || []) {
+      const matchingSentences = transcript.sentences.filter(sentence => 
+        sentence.text.toLowerCase().includes(searchLower)
+      );
+
+      if (matchingSentences.length > 0) {
+        // Find the corresponding call
+        const call = callsResponse.calls.find(c => 
+          transcriptsResponse.transcripts.some(t => t.speakerId && c.id)
+        );
+
+        matches.push({
+          callId: call?.id,
+          callTitle: call?.title,
+          callDate: call?.started,
+          speakerId: transcript.speakerId,
+          topic: transcript.topic,
+          matchCount: matchingSentences.length,
+          matches: matchingSentences.map(s => ({
+            text: s.text,
+            startTime: s.start,
+            // Include context (surrounding text)
+            context: this.getContext(transcript.sentences, s.start, 50)
+          }))
+        });
+
+        if (matches.length >= maxResults) {
+          break;
+        }
+      }
+    }
+
+    return {
+      searchText,
+      matches,
+      totalCalls: callsResponse.calls.length,
+      searchedCalls: callIds.length,
+      resultsLimited: matches.length >= maxResults
+    };
+  }
+
+  private getContext(sentences: Array<{start: number; text: string}>, targetStart: number, contextWords: number): string {
+    const targetIndex = sentences.findIndex(s => s.start === targetStart);
+    if (targetIndex === -1) return '';
+
+    let context = '';
+    let wordCount = 0;
+    
+    // Add sentences before
+    for (let i = targetIndex - 1; i >= 0 && wordCount < contextWords / 2; i--) {
+      const words = sentences[i].text.split(' ');
+      wordCount += words.length;
+      context = sentences[i].text + ' ' + context;
+    }
+    
+    // Add target sentence
+    context += sentences[targetIndex].text;
+    wordCount = 0;
+    
+    // Add sentences after
+    for (let i = targetIndex + 1; i < sentences.length && wordCount < contextWords / 2; i++) {
+      const words = sentences[i].text.split(' ');
+      wordCount += words.length;
+      context += ' ' + sentences[i].text;
+    }
+    
+    return context.trim();
+  }
 }
 
 // Default client for stdio mode (requires credentials)
@@ -224,6 +316,33 @@ const RETRIEVE_TRANSCRIPTS_TOOL: Tool = {
   }
 };
 
+const SEARCH_TRANSCRIPTS_TOOL: Tool = {
+  name: "search_transcripts",
+  description: "Search through call transcripts for specific text. Returns matching calls with context around the matches. Note: This searches locally after fetching transcripts, as Gong doesn't provide a native search API.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      searchText: {
+        type: "string",
+        description: "Text to search for in transcripts (case-insensitive)"
+      },
+      fromDateTime: {
+        type: "string",
+        description: "Start date/time in ISO format (e.g. 2024-03-01T00:00:00Z)"
+      },
+      toDateTime: {
+        type: "string",
+        description: "End date/time in ISO format (e.g. 2024-03-31T23:59:59Z)"
+      },
+      maxResults: {
+        type: "number",
+        description: "Maximum number of matching calls to return (default: 50)"
+      }
+    },
+    required: ["searchText"]
+  }
+};
+
 // Server implementation
 const server = new Server(
   {
@@ -257,9 +376,21 @@ function isGongRetrieveTranscriptsArgs(args: unknown): args is GongRetrieveTrans
   );
 }
 
+function isGongSearchTranscriptsArgs(args: unknown): args is GongSearchTranscriptsArgs {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    "searchText" in args &&
+    typeof (args as GongSearchTranscriptsArgs).searchText === "string" &&
+    (!("fromDateTime" in args) || typeof (args as GongSearchTranscriptsArgs).fromDateTime === "string") &&
+    (!("toDateTime" in args) || typeof (args as GongSearchTranscriptsArgs).toDateTime === "string") &&
+    (!("maxResults" in args) || typeof (args as GongSearchTranscriptsArgs).maxResults === "number")
+  );
+}
+
 // Tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [LIST_CALLS_TOOL, RETRIEVE_TRANSCRIPTS_TOOL],
+  tools: [LIST_CALLS_TOOL, RETRIEVE_TRANSCRIPTS_TOOL, SEARCH_TRANSCRIPTS_TOOL],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name: string; arguments?: unknown } }, extra) => {
@@ -305,6 +436,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name
         }
         const { callIds } = args;
         const response = await gongClient.retrieveTranscripts(callIds);
+        return {
+          content: [{ 
+            type: "text", 
+            text: JSON.stringify(response, null, 2)
+          }],
+          isError: false,
+        };
+      }
+
+      case "search_transcripts": {
+        if (!isGongSearchTranscriptsArgs(args)) {
+          throw new Error("Invalid arguments for search_transcripts");
+        }
+        const { searchText, fromDateTime, toDateTime, maxResults } = args;
+        const response = await gongClient.searchTranscripts(searchText, fromDateTime, toDateTime, maxResults);
         return {
           content: [{ 
             type: "text", 

@@ -319,51 +319,57 @@ git push heroku main
 
 ## Available Tools
 
-### List Calls
+### 1. List Calls
 
 Retrieves a list of Gong calls with optional date range filtering.
 
 ```typescript
 {
   name: "list_calls",
-  description: "List Gong calls with optional date range filtering. Returns call details including ID, title, start/end times, participants, and duration.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      fromDateTime: {
-        type: "string",
-        description: "Start date/time in ISO format (e.g. 2024-03-01T00:00:00Z)"
-      },
-      toDateTime: {
-        type: "string",
-        description: "End date/time in ISO format (e.g. 2024-03-31T23:59:59Z)"
-      }
-    }
+  description: "List Gong calls with optional date range filtering.",
+  parameters: {
+    fromDateTime: "ISO date string (optional)",
+    toDateTime: "ISO date string (optional)"
   }
 }
 ```
 
-### Retrieve Transcripts
+### 2. Retrieve Transcripts
 
 Retrieves detailed transcripts for specified call IDs.
 
 ```typescript
 {
   name: "retrieve_transcripts",
-  description: "Retrieve transcripts for specified call IDs. Returns detailed transcripts including speaker IDs, topics, and timestamped sentences.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      callIds: {
-        type: "array",
-        items: { type: "string" },
-        description: "Array of Gong call IDs to retrieve transcripts for"
-      }
-    },
-    required: ["callIds"]
+  description: "Retrieve transcripts for specified call IDs.",
+  parameters: {
+    callIds: "Array of Gong call IDs (required)"
   }
 }
 ```
+
+### 3. Search Transcripts
+
+Search through call transcripts for specific text. Returns matching calls with context.
+
+```typescript
+{
+  name: "search_transcripts",
+  description: "Search through call transcripts for specific text.",
+  parameters: {
+    searchText: "Text to search for (required, case-insensitive)",
+    fromDateTime: "ISO date string (optional)",
+    toDateTime: "ISO date string (optional)",
+    maxResults: "Maximum results to return (optional, default: 50)"
+  }
+}
+```
+
+**Note:** Gong doesn't provide a native search API, so this tool:
+1. Fetches calls within the date range
+2. Retrieves transcripts for those calls
+3. Searches locally through the transcript text
+4. Returns matches with surrounding context
 
 ## License
 
