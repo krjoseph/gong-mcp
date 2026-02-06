@@ -2,6 +2,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -10,22 +11,28 @@ import {
 import axios from 'axios';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import express from 'express';
+import { randomUUID } from 'crypto';
 
-// Redirect all console output to stderr
+// Redirect all console output to stderr (only for stdio mode)
 const originalConsole = { ...console };
-console.log = (...args) => originalConsole.error(...args);
-console.info = (...args) => originalConsole.error(...args);
-console.warn = (...args) => originalConsole.error(...args);
+const redirectConsole = () => {
+  console.log = (...args) => originalConsole.error(...args);
+  console.info = (...args) => originalConsole.error(...args);
+  console.warn = (...args) => originalConsole.error(...args);
+};
 
 dotenv.config();
 
-const GONG_API_URL = 'https://api.gong.io/v2';
+const GONG_API_URL = process.env.GONG_API_URL || 'https://api.gong.io/v2';
 const GONG_ACCESS_KEY = process.env.GONG_ACCESS_KEY;
 const GONG_ACCESS_SECRET = process.env.GONG_ACCESS_SECRET;
 
-// Check for required environment variables
-if (!GONG_ACCESS_KEY || !GONG_ACCESS_SECRET) {
-  console.error("Error: GONG_ACCESS_KEY and GONG_ACCESS_SECRET environment variables are required");
+// For stdio mode, credentials are required
+// For HTTP mode with BYOT, credentials are optional
+const isHttpMode = process.env.MCP_TRANSPORT === 'streamable-http';
+if (!isHttpMode && (!GONG_ACCESS_KEY || !GONG_ACCESS_SECRET)) {
+  console.error("Error: GONG_ACCESS_KEY and GONG_ACCESS_SECRET environment variables are required for stdio transport");
   process.exit(1);
 }
 
@@ -73,15 +80,21 @@ interface GongRetrieveTranscriptsArgs {
 
 // Gong API Client
 class GongClient {
-  private accessKey: string;
-  private accessSecret: string;
+  private accessKey?: string;
+  private accessSecret?: string;
+  private bearerToken?: string;
 
-  constructor(accessKey: string, accessSecret: string) {
+  constructor(accessKey?: string, accessSecret?: string, bearerToken?: string) {
     this.accessKey = accessKey;
     this.accessSecret = accessSecret;
+    this.bearerToken = bearerToken;
   }
 
   private async generateSignature(method: string, path: string, timestamp: string, params?: unknown): Promise<string> {
+    if (!this.accessSecret) {
+      throw new Error('Access secret is required for signature generation');
+    }
+    
     const stringToSign = `${method}\n${path}\n${timestamp}\n${params ? JSON.stringify(params) : ''}`;
     const encoder = new TextEncoder();
     const keyData = encoder.encode(this.accessSecret);
@@ -105,21 +118,30 @@ class GongClient {
   }
 
   private async request<T>(method: string, path: string, params?: Record<string, string | undefined>, data?: Record<string, unknown>): Promise<T> {
-    const timestamp = new Date().toISOString();
     const url = `${GONG_API_URL}${path}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // Use Bearer token if provided, otherwise use API key/secret
+    if (this.bearerToken) {
+      headers['Authorization'] = `Bearer ${this.bearerToken}`;
+    } else if (this.accessKey && this.accessSecret) {
+      const timestamp = new Date().toISOString();
+      headers['Authorization'] = `Basic ${Buffer.from(`${this.accessKey}:${this.accessSecret}`).toString('base64')}`;
+      headers['X-Gong-AccessKey'] = this.accessKey;
+      headers['X-Gong-Timestamp'] = timestamp;
+      headers['X-Gong-Signature'] = await this.generateSignature(method, path, timestamp, data || params);
+    } else {
+      throw new Error('Either bearer token or access key/secret must be provided');
+    }
     
     const response = await axios({
       method,
       url,
       params,
       data,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${Buffer.from(`${this.accessKey}:${this.accessSecret}`).toString('base64')}`,
-        'X-Gong-AccessKey': this.accessKey,
-        'X-Gong-Timestamp': timestamp,
-        'X-Gong-Signature': await this.generateSignature(method, path, timestamp, data || params)
-      }
+      headers
     });
 
     return response.data as T;
@@ -145,7 +167,27 @@ class GongClient {
   }
 }
 
-const gongClient = new GongClient(GONG_ACCESS_KEY, GONG_ACCESS_SECRET);
+// Default client for stdio mode (requires credentials)
+let defaultGongClient: GongClient | null = null;
+if (GONG_ACCESS_KEY && GONG_ACCESS_SECRET) {
+  defaultGongClient = new GongClient(GONG_ACCESS_KEY, GONG_ACCESS_SECRET);
+}
+
+// Helper to get or create Gong client with optional bearer token
+// IMPORTANT: This function creates a NEW client instance for each bearer token
+// to ensure tokens are never cached or reused across requests.
+function getGongClient(bearerToken?: string): GongClient {
+  if (bearerToken) {
+    // Always create a new client instance for bearer tokens
+    // This ensures no token caching across requests
+    return new GongClient(undefined, undefined, bearerToken);
+  }
+  if (defaultGongClient) {
+    // Safe to reuse: environment credentials don't change per-request
+    return defaultGongClient;
+  }
+  throw new Error('No Gong credentials available. Provide Authorization header or set GONG_ACCESS_KEY/GONG_ACCESS_SECRET');
+}
 
 // Tool definitions
 const LIST_CALLS_TOOL: Tool = {
@@ -220,13 +262,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [LIST_CALLS_TOOL, RETRIEVE_TRANSCRIPTS_TOOL],
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name: string; arguments?: unknown } }) => {
+server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name: string; arguments?: unknown } }, extra) => {
   try {
     const { name, arguments: args } = request.params;
 
     if (!args) {
       throw new Error("No arguments provided");
     }
+
+    // Extract bearer token from Authorization header if present
+    let bearerToken: string | undefined;
+    if (extra.requestInfo?.headers) {
+      const authHeader = extra.requestInfo.headers['authorization'] || extra.requestInfo.headers['Authorization'];
+      if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        bearerToken = authHeader.substring(7);
+      }
+    }
+
+    // Get Gong client (creates new instance per request if bearer token provided)
+    // This ensures tokens and clients are NEVER cached across requests
+    const gongClient = getGongClient(bearerToken);
 
     switch (name) {
       case "list_calls": {
@@ -279,8 +334,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request: { params: { name
 });
 
 async function runServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const transport = process.env.MCP_TRANSPORT || 'stdio';
+  
+  if (transport === 'streamable-http') {
+    // Streamable HTTP mode - run as HTTP server
+    const port = parseInt(process.env.PORT || '3000', 10);
+    const host = process.env.HOST || '127.0.0.1';
+    
+    // Create streamable HTTP transport (stateful mode with session management)
+    const httpTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+    
+    await server.connect(httpTransport);
+    
+    // Create Express app
+    const app = express();
+    app.use(express.json());
+    
+    // Health check endpoint
+    app.get('/health', (req, res) => {
+      res.json({ status: 'healthy', transport: 'streamable-http' });
+    });
+    
+    // MCP endpoint - handles both POST (JSON-RPC requests) and GET (SSE streaming)
+    app.all('/mcp', async (req, res) => {
+      await httpTransport.handleRequest(req, res, req.body);
+    });
+    
+    app.listen(port, host, () => {
+      console.log(`Gong MCP server listening on http://${host}:${port}`);
+      console.log(`MCP endpoint: http://${host}:${port}/mcp`);
+      console.log(`Health check: http://${host}:${port}/health`);
+    });
+  } else {
+    // Stdio mode - run as CLI process
+    redirectConsole();
+    const stdioTransport = new StdioServerTransport();
+    await server.connect(stdioTransport);
+  }
 }
 
 runServer().catch((error) => {
