@@ -504,6 +504,30 @@ async function runServer() {
     const app = express();
     app.use(express.json());
     
+    // OAuth 2.0 Authorization Server Metadata (RFC 8414)
+    // Documents Gong's OAuth endpoints per https://help.gong.io/docs/create-an-app-for-gong
+    app.get('/.well-known/oauth-authorization-server', (req, res) => {
+      res.type('application/json').json({
+        issuer: 'https://app.gong.io',
+        authorization_endpoint: 'https://app.gong.io/oauth2/authorize',
+        token_endpoint: 'https://app.gong.io/oauth2/generate-customer-token',
+        response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'refresh_token'],
+        token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
+        code_challenge_methods_supported: ['plain', 'S256'],
+        scopes_supported: [
+          'api:calls:read:basic',
+          'api:calls:read:extensive',
+          'api:calls:create',
+          'api:users:read',
+          'api:workspaces:read',
+          'api:settings:read'
+        ],
+        documentation: 'https://help.gong.io/docs/create-an-app-for-gong',
+        service_documentation: 'https://help.gong.io/docs/create-an-app-for-gong'
+      });
+    });
+
     // Health check endpoint
     app.get('/health', (req, res) => {
       res.json({ status: 'healthy', transport: 'streamable-http' });
