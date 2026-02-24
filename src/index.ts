@@ -503,52 +503,108 @@ async function runServer() {
     // Create Express app
     const app = express();
     app.use(express.json());
-    
+    app.use(express.urlencoded({ extended: true }));
+
+    // Base URL for this server (used in OAuth metadata so Claude hits our token proxy)
+    const getBaseUrl = (req: express.Request) => {
+      const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+      const host = req.get('host') || req.get('x-forwarded-host');
+      return host ? `${proto}://${host}` : '';
+    };
+
+    const SCOPES = [
+      'api:calls:read:transcript',
+      'api:workspaces:read',
+      'api:calls:read:extensive',
+      'api:stats:interaction',
+      'api:calls:read:basic',
+      'api:calls:read:media-url',
+      'api:users:read'
+    ];
+
+    const GONG_TOKEN_URL = 'https://app.gong.io/oauth2/generate-customer-token';
+
+    // OAuth token proxy: accepts client_secret_post (body) from Claude, forwards to Gong with client_secret_basic
+    app.post('/oauth/token', async (req, res) => {
+      try {
+        const body = req.body || {};
+        const client_id = body.client_id;
+        const client_secret = body.client_secret;
+
+        if (!client_id || !client_secret) {
+          res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'client_id and client_secret are required (client_secret_post)'
+          });
+          return;
+        }
+
+        // Build form body for Gong (omit client credentials; we use Basic auth)
+        const params: Record<string, string> = {};
+        if (body.grant_type) params.grant_type = body.grant_type;
+        if (body.code) params.code = body.code;
+        if (body.redirect_uri) params.redirect_uri = body.redirect_uri;
+        if (body.refresh_token) params.refresh_token = body.refresh_token;
+        if (body.validity_duration != null) params.validity_duration = String(body.validity_duration);
+        // Gong doc shows client_id in query/body; include for compatibility
+        params.client_id = client_id;
+
+        const formBody = new URLSearchParams(params).toString();
+        const auth = Buffer.from(`${client_id}:${client_secret}`).toString('base64');
+
+        const response = await axios({
+          method: 'POST',
+          url: GONG_TOKEN_URL,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${auth}`
+          },
+          data: formBody,
+          validateStatus: () => true
+        });
+
+        const contentType = response.headers['content-type'] || 'application/json';
+        res.status(response.status).set('Content-Type', contentType).send(response.data);
+      } catch (err) {
+        console.error('OAuth token proxy error:', err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'server_error',
+            error_description: err instanceof Error ? err.message : 'Token proxy failed'
+          });
+        }
+      }
+    });
+
     // OAuth 2.0 Authorization Server Metadata (RFC 8414)
-    // Documents Gong's OAuth endpoints per https://help.gong.io/docs/create-an-app-for-gong
+    // token_endpoint points to our proxy so Claude can use client_secret_post; proxy forwards to Gong with client_secret_basic
     app.get('/.well-known/oauth-authorization-server', (req, res) => {
+      const baseUrl = getBaseUrl(req);
       res.type('application/json').json({
         issuer: 'https://app.gong.io',
         authorization_endpoint: 'https://app.gong.io/oauth2/authorize',
-        token_endpoint: 'https://app.gong.io/oauth2/generate-customer-token',
+        token_endpoint: baseUrl ? `${baseUrl}/oauth/token` : 'https://app.gong.io/oauth2/generate-customer-token',
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'refresh_token'],
-        token_endpoint_auth_methods_supported: ['client_secret_basic'],
-        scopes_supported: [
-          'api:calls:read:transcript',
-          'api:workspaces:read',
-          'api:calls:read:extensive',
-          'api:stats:interaction',
-          'api:calls:read:basic',
-          'api:calls:read:media-url',
-          'api:users:read'
-        ],
+        token_endpoint_auth_methods_supported: ['client_secret_post'],
+        scopes_supported: SCOPES,
         documentation: 'https://help.gong.io/docs/create-an-app-for-gong',
         service_documentation: 'https://help.gong.io/docs/create-an-app-for-gong'
       });
     });
 
-    // OpenID Connect Discovery (OpenID Connect Core 1.0)
-    // Same Gong OAuth endpoints for clients that use OIDC discovery
+    // OpenID Connect Discovery
     app.get('/.well-known/openid-configuration', (req, res) => {
+      const baseUrl = getBaseUrl(req);
       res.type('application/json').json({
         issuer: 'https://app.gong.io',
         authorization_endpoint: 'https://app.gong.io/oauth2/authorize',
-        token_endpoint: 'https://app.gong.io/oauth2/generate-customer-token',
+        token_endpoint: baseUrl ? `${baseUrl}/oauth/token` : 'https://app.gong.io/oauth2/generate-customer-token',
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'refresh_token'],
-        token_endpoint_auth_methods_supported: ['client_secret_basic'],
+        token_endpoint_auth_methods_supported: ['client_secret_post'],
         code_challenge_methods_supported: ['plain', 'S256'],
-        scopes_supported: [
-          'openid',
-          'api:calls:read:transcript',
-          'api:workspaces:read',
-          'api:calls:read:extensive',
-          'api:stats:interaction',
-          'api:calls:read:basic',
-          'api:calls:read:media-url',
-          'api:users:read'
-        ],
+        scopes_supported: ['openid', ...SCOPES],
         subject_types_supported: ['public'],
         id_token_signing_alg_values_supported: ['RS256'],
         documentation: 'https://help.gong.io/docs/create-an-app-for-gong'
