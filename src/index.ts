@@ -528,6 +528,33 @@ async function runServer() {
       });
     });
 
+    // OpenID Connect Discovery (OpenID Connect Core 1.0)
+    // Same Gong OAuth endpoints for clients that use OIDC discovery
+    app.get('/.well-known/openid-configuration', (req, res) => {
+      res.type('application/json').json({
+        issuer: 'https://app.gong.io',
+        authorization_endpoint: 'https://app.gong.io/oauth2/authorize',
+        token_endpoint: 'https://app.gong.io/oauth2/generate-customer-token',
+        response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'refresh_token'],
+        token_endpoint_auth_methods_supported: ['client_secret_basic'],
+        code_challenge_methods_supported: ['plain', 'S256'],
+        scopes_supported: [
+          'openid',
+          'api:calls:read:transcript',
+          'api:workspaces:read',
+          'api:calls:read:extensive',
+          'api:stats:interaction',
+          'api:calls:read:basic',
+          'api:calls:read:media-url',
+          'api:users:read'
+        ],
+        subject_types_supported: ['public'],
+        id_token_signing_alg_values_supported: ['RS256'],
+        documentation: 'https://help.gong.io/docs/create-an-app-for-gong'
+      });
+    });
+
     // Health check endpoint
     app.get('/health', (req, res) => {
       res.json({ status: 'healthy', transport: 'streamable-http' });
