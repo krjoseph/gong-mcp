@@ -513,15 +513,15 @@ async function runServer() {
         token_endpoint: 'https://app.gong.io/oauth2/generate-customer-token',
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'refresh_token'],
-        token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-        code_challenge_methods_supported: ['plain', 'S256'],
+        token_endpoint_auth_methods_supported: ['client_secret_basic'],
         scopes_supported: [
-          'api:calls:read:basic',
-          'api:calls:read:extensive',
-          'api:calls:create',
-          'api:users:read',
+          'api:calls:read:transcript',
           'api:workspaces:read',
-          'api:settings:read'
+          'api:calls:read:extensive',
+          'api:stats:interaction',
+          'api:calls:read:basic',
+          'api:calls:read:media-url',
+          'api:users:read'
         ],
         documentation: 'https://help.gong.io/docs/create-an-app-for-gong',
         service_documentation: 'https://help.gong.io/docs/create-an-app-for-gong'
