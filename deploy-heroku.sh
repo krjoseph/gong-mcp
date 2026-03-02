@@ -119,12 +119,16 @@ if [ -n "$(git status --porcelain package.json)" ]; then
     echo "   ✅ package.json committed."
 fi
 
-# Push to Heroku
+# Push to Heroku (force when deploying from main to overwrite remote history)
 echo ""
 echo "🚀 Deploying to Heroku..."
 echo "   This may take a few minutes..."
 echo ""
-git push heroku $BRANCH_TO_DEPLOY:main
+if [ "$BRANCH_TO_DEPLOY" = "main" ]; then
+    git push heroku $BRANCH_TO_DEPLOY:main --force
+else
+    git push heroku $BRANCH_TO_DEPLOY:main
+fi
 
 if [ $? -eq 0 ]; then
     echo ""
