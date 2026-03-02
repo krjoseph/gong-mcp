@@ -538,8 +538,6 @@ async function runServer() {
           });
           return;
         }
-        console.log('client_id', client_id);
-        console.log('client_secret', client_secret);
 
         // Build form body for Gong (omit client credentials; we use Basic auth)
         const params: Record<string, string> = {};
