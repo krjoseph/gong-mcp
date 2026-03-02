@@ -101,25 +101,6 @@ echo ""
 echo "⚙️  Configuring environment variables..."
 heroku config:set MCP_TRANSPORT=streamable-http -a "$HEROKU_APP"
 
-# Check if Gong credentials are set
-GONG_KEY_SET=$(heroku config:get GONG_ACCESS_KEY -a "$HEROKU_APP" 2>/dev/null || echo "")
-GONG_SECRET_SET=$(heroku config:get GONG_ACCESS_SECRET -a "$HEROKU_APP" 2>/dev/null || echo "")
-
-if [ -z "$GONG_KEY_SET" ] || [ -z "$GONG_SECRET_SET" ]; then
-    echo ""
-    echo "ℹ️  INFO: Gong API credentials not set - deploying in BYOT mode"
-    echo ""
-    echo "   The server will run in BYOT (Bring Your Own Token) mode."
-    echo "   Users must provide their Gong token via Authorization header."
-    echo ""
-    echo "   To set default credentials later:"
-    echo "   heroku config:set GONG_ACCESS_KEY=your_key -a $HEROKU_APP"
-    echo "   heroku config:set GONG_ACCESS_SECRET=your_secret -a $HEROKU_APP"
-    echo ""
-else
-    echo "   ✅ Gong credentials already configured."
-fi
-
 # Commit Procfile if needed
 if [ -n "$(git status --porcelain Procfile)" ]; then
     echo ""
@@ -149,22 +130,34 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "✅ Deployment successful!"
     echo ""
-    echo "📊 View logs:"
-    echo "   heroku logs --tail -a $HEROKU_APP"
-    echo ""
-    echo "🌐 Open app:"
-    echo "   heroku open -a $HEROKU_APP"
-    echo ""
-    echo "🔍 Check status:"
-    echo "   curl https://$HEROKU_APP.herokuapp.com/health"
-    echo ""
-    echo "📡 MCP endpoint:"
-    echo "   https://$HEROKU_APP.herokuapp.com/mcp"
-    echo ""
-    echo "🔧 Set credentials (if not already set):"
-    echo "   heroku config:set GONG_ACCESS_KEY=your_key -a $HEROKU_APP"
-    echo "   heroku config:set GONG_ACCESS_SECRET=your_secret -a $HEROKU_APP"
-    echo ""
+    
+    # Get the actual Heroku app URL
+    APP_URL=$(heroku info -a $HEROKU_APP | grep "Web URL" | awk '{print $3}' | tr -d '\r')
+    
+    if [ -n "$APP_URL" ]; then
+        # Remove trailing slash if present
+        APP_URL=${APP_URL%/}
+        
+        echo "📊 View logs:"
+        echo "   heroku logs --tail -a $HEROKU_APP"
+        echo ""
+        echo "🌐 App URL:"
+        echo "   $APP_URL"
+        echo ""
+        echo "🔍 Check status:"
+        echo "   curl ${APP_URL}/health"
+        echo ""
+        echo "📡 MCP endpoint:"
+        echo "   ${APP_URL}/mcp"
+        echo ""
+    else
+        echo "📊 View logs:"
+        echo "   heroku logs --tail -a $HEROKU_APP"
+        echo ""
+        echo "🌐 Open app:"
+        echo "   heroku open -a $HEROKU_APP"
+        echo ""
+    fi
 else
     echo ""
     echo "❌ Deployment failed!"
